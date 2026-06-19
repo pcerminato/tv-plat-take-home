@@ -1,8 +1,9 @@
-import { pool } from '../db';
+import { pool } from "../db";
 
 export interface FindResourcesOpts {
   ownerId?: number;
   limit?: number;
+  last?: number;
   orderBy?: string;
 }
 
@@ -15,6 +16,8 @@ export interface ResourceRow {
   created_at: Date;
   updated_at: Date;
 }
+
+export const DEFAULT_LIMIT = 10;
 
 // SHARED PATH — used by multiple endpoints. Changing this affects all callers.
 //
@@ -30,9 +33,18 @@ export async function findResources(
     FROM resources
   `;
 
-  if (opts.ownerId !== undefined) {
-    params.push(opts.ownerId);
-    sql += ` WHERE owner_id = $${params.length}`;
+  if (opts.ownerId || opts.last) {
+    sql += " WHERE";
+
+    if (opts.ownerId !== undefined) {
+      params.push(opts.ownerId);
+      sql += ` owner_id = $${params.length}`;
+    }
+
+    if (opts.last !== undefined) {
+      params.push(opts.last);
+      sql += ` id > $${params.length}`;
+    }
   }
 
   // orderBy is only ever passed internally (never from request input).
@@ -40,8 +52,8 @@ export async function findResources(
     sql += ` ORDER BY ${opts.orderBy}`;
   }
 
-  if (opts.limit !== undefined) {
-    params.push(opts.limit);
+  if (opts.last !== undefined || opts.limit !== undefined) {
+    params.push(opts?.limit || DEFAULT_LIMIT);
     sql += ` LIMIT $${params.length}`;
   }
 
