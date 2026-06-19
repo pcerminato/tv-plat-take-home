@@ -5,6 +5,8 @@ export interface FindResourcesOpts {
   limit?: number;
   last?: number;
   orderBy?: string;
+  type?: string;
+  status?: string;
 }
 
 export interface ResourceRow {
@@ -33,23 +35,50 @@ export async function findResources(
     FROM resources
   `;
 
-  if (opts.ownerId || opts.last) {
-    sql += " WHERE";
+  if (
+    opts.ownerId !== undefined ||
+    opts.last !== undefined ||
+    opts.type !== undefined ||
+    opts.status !== undefined
+  ) {
+    let where = "";
 
     if (opts.ownerId !== undefined) {
       params.push(opts.ownerId);
-      sql += ` owner_id = $${params.length}`;
+      where += ` owner_id = $${params.length}`;
     }
 
     if (opts.last !== undefined) {
+      if (where !== "") {
+        where += " AND";
+      }
       params.push(opts.last);
-      sql += ` id > $${params.length}`;
+      where += ` id > $${params.length}`;
     }
+
+    if (opts.type !== undefined) {
+      if (where !== "") {
+        where += " AND";
+      }
+      params.push(opts.type);
+      where += ` type = $${params.length}`;
+    }
+
+    if (opts.status !== undefined) {
+      if (where !== "") {
+        where += " AND";
+      }
+      params.push(opts.status);
+      where += ` status = $${params.length}`;
+    }
+
+    sql += " WHERE " + where;
   }
 
   // orderBy is only ever passed internally (never from request input).
   if (opts.orderBy) {
-    sql += ` ORDER BY ${opts.orderBy}`;
+    params.push(opts.orderBy);
+    sql += ` ORDER BY $${params.length}`;
   }
 
   if (opts.last !== undefined || opts.limit !== undefined) {

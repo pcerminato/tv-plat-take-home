@@ -19,10 +19,12 @@ export function createApp() {
     inputSanitizer,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { limit, last } = req.sanitized;
+        const { limit, last, status, type } = req.sanitized;
         const resources = await findResources({
           last,
           limit,
+          status,
+          type,
         });
         res.json(resources);
       } catch (err) {

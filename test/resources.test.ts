@@ -28,39 +28,65 @@ describe("GET /resources", () => {
     expect(res.body).toHaveLength(30);
   });
 
-  it.each([
-    { limit: 10, last: 10, result: 10 },
-    { limit: "10", last: "10", result: 10 },
-    { limit: 11, last: undefined, result: 11 },
-    { limit: undefined, last: 29, result: 1 },
-    { limit: undefined, last: 1, result: DEFAULT_LIMIT },
-    { limit: 10, last: 29, result: 1 }, // limit beyound available results
-    { limit: undefined, last: 31, result: 0 }, // last higher that available
-    { limit: undefined, last: undefined, result: 30 }, // expect the full set
-  ])(
-    "returns a paginated set of $result resources",
-    async ({ limit, last, result }) => {
-      const uri = buildResourcesUri(limit, last);
-      const res = await request(app).get(uri);
+  describe("Paginated resources", () => {
+    it.each([
+      { limit: 10, last: 10, result: 10 },
+      { limit: "10", last: "10", result: 10 },
+      { limit: 11, result: 11 },
+      { last: 29, result: 1 },
+      { last: 1, result: DEFAULT_LIMIT },
+      { limit: 10, last: 29, result: 1 }, // limit beyound available results
+      { last: 31, result: 0 }, // last higher that available
+      { limit: undefined, last: undefined, result: 30 }, // expect the full set
+    ])(
+      "returns a paginated set of $result resources",
+      async ({ limit, last, result }) => {
+        const uri = buildResourcesUri({ limit, last });
+        const res = await request(app).get(uri);
 
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body).toHaveLength(result);
-    },
-  );
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body).toHaveLength(result);
+      },
+    );
 
-  it.each([
-    [50, undefined],
-    ["hello", "world"],
-    [undefined, "DROP%20TABLE%20users;"],
-  ])(
-    "returns an error for a bad input. Limit: %s, Last: %s",
-    async (limit, last) => {
-      const uri = buildResourcesUri(limit, last);
-      const res = await request(app).get(uri);
+    it.each([
+      [50, undefined],
+      ["hello", "world"],
+      [undefined, "DROP%20TABLE%20users;"],
+    ])(
+      "returns an error for a bad input. Limit: %s, Last: %s",
+      async (limit, last) => {
+        const uri = buildResourcesUri({ limit, last });
+        const res = await request(app).get(uri);
 
-      expect(res.status).toBe(400);
-      expect(res.body).toHaveProperty("errors");
-    },
-  );
+        expect(res.status).toBe(400);
+        expect(res.body).toHaveProperty("errors");
+      },
+    );
+  });
+
+  describe("Filtered resources", () => {
+    it.each([
+      { status: undefined, type: undefined, result: 30 },
+      { type: "sheet", result: 10 },
+      { type: "doc", result: 10 },
+      { type: "slide", result: 10 },
+      { status: "archived", result: 10 },
+      { status: "draft", result: 10 },
+      { status: "published", result: 10 },
+      { status: "published", type: "doc", result: 0 },
+      { type: "doc", last: 16, result: 4 },
+    ])(
+      "returns $result resources for filters status:$status and type:$type",
+      async ({ status, type, last, result }) => {
+        const uri = buildResourcesUri({ status, type, last });
+        const res = await request(app).get(uri);
+
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body).toHaveLength(result);
+      },
+    );
+  });
 });

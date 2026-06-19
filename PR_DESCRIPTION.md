@@ -18,11 +18,46 @@ A consideration to bring up for the _last-id_ approach is that for the case of `
 - XSS: is catch by express-validator when using `isInt()` and `.escape()`
 - SQL injection. I am just relying on pg parametrized queries to prevent it. An alternative would be using an ORM.
 
+### Indexes
+
+Considering whether adding indexes for `type` and `status` will depend on:
+
+- the amount of data to scan in the DB (if the data is small, postgres might plan not to use the index and use seq scan).
+- the frequency the `type` and `status` params are used in the endpoint and how are they combined.
+
+Anyway, as `resources` is the main entity of the domain, I assume that the amount of data in it will grow as much as an index would be fundamental.
+
+Then mking the right choice on how to build the index will depend on the usage of `type` and `status`.
+
+Below come some assumptions.
+
+They could be used in a query _combined_ or _individually_.
+
+_Combined_ 🟡
+
+If combined is the use case, then a composite index would be a good choice. From there, the question that follows is what is the main column for the index? If either of the columns (ex. `status`) can be ensured to be the main, for example queries,
+`WHERE status = 'published' AND type = 'sheet'` or `WHERE status = 'published'`, the a coposite index status->type will suit perfectly.
+`CREATE INDEX idx_resources_status_type ON resources (status, type);`
+
+On the other hand, such index wouldn't work for queries filtered by just `WHERE type = 'sheet'`
+
+_individually (or combined)_ 🟢
+
+For this use case, two separate indexes on status and type would work out better, because it would provide more flexibility as postgres would combine them or use them individually.
+
+```
+CREATE INDEX idx_resources_type ON resources (type);
+CRETE INDEX idx_resources_status ON resources (status);
+```
+
+For either choice, it would also make sense to include the `id` as part of the index as it is used as a filter for pagination.
+
 ## Changes
 
 - Adding a middleware/input-sanitizer.ts defining operations to validate the inputs given in query string (limit, last).
   - Invalid inputs would result on a "invalid value" response of the endpoint .
 - Adding pagination based on the _last-id_ strategy (explained above).
+- Adding filtering by `status` and `type`.
 - Including unit test cases to cover pagination edge cases and error expected.
 - Changing `findResources()` to implement pagination.
   - Changes in `findResources()` are compatible with the previous behaviour of returning the full dataset.
@@ -30,10 +65,11 @@ A consideration to bring up for the _last-id_ approach is that for the case of `
 
 ## Testing
 
-### Test cases for `/resources` pagination
+### Test cases for `/resources`
 
 - **Automated tests:**
   - Test suites to validate the expected behaviour on edge cases and for errors.
+  - A test suite to validate the consistency of the result of the combinations of the filters by `status` and `type`, along with the pagination parameters.
 - **Edge cases:**
   - bad inputs (ex. strings that don't represent numbers).
   - requesting data out of the `limit`
@@ -58,7 +94,7 @@ A consideration to bring up for the _last-id_ approach is that for the case of `
 
 ## Trade-offs
 
-(See "pagination strategy" and "security" titles above.)
+(See "pagination strategy", "security" and "indexes" titles above.)
 
 ## Open questions
 
