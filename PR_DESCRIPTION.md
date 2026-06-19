@@ -26,6 +26,7 @@ A consideration to bring up for the _last-id_ approach is that for the case of `
 - Including unit test cases to cover pagination edge cases and error expected.
 - Changing `findResources()` to implement pagination.
   - Changes in `findResources()` are compatible with the previous behaviour of returning the full dataset.
+- Adding an error handler as a middleware to processed uncatched errors.
 
 ## Testing
 

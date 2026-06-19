@@ -3,6 +3,7 @@ import { NextFunction, Request, Response } from "express";
 import { authStub } from "./middleware/auth";
 import { findResources } from "./data/resources";
 import { inputSanitizer } from "./middleware/input-sanitizer";
+import { errorHandler } from "./middleware/errors-handler";
 
 export function createApp() {
   const app = express();
@@ -55,6 +56,8 @@ export function createApp() {
       next(err);
     }
   });
+
+  app.use(errorHandler);
 
   return app;
 }
