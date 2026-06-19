@@ -77,8 +77,7 @@ export async function findResources(
 
   // orderBy is only ever passed internally (never from request input).
   if (opts.orderBy) {
-    params.push(opts.orderBy);
-    sql += ` ORDER BY $${params.length}`;
+    sql += ` ORDER BY ${opts.orderBy}`;
   }
 
   if (opts.last !== undefined || opts.limit !== undefined) {

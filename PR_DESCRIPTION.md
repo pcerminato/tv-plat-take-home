@@ -70,6 +70,7 @@ For either choice, it would also make sense to include the `id` as part of the i
 - **Automated tests:**
   - Test suites to validate the expected behaviour on edge cases and for errors.
   - A test suite to validate the consistency of the result of the combinations of the filters by `status` and `type`, along with the pagination parameters.
+  - Added two basic tests both for "GET /resources/recent" and for "GET /users/:userId/resources" endpoints to have cover backwards compatibility covered when changin `findResources()`.
 - **Edge cases:**
   - bad inputs (ex. strings that don't represent numbers).
   - requesting data out of the `limit`

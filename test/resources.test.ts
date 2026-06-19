@@ -90,3 +90,26 @@ describe("GET /resources", () => {
     );
   });
 });
+
+describe("GET /resources/recent", () => {
+  it("returns the full seeded set of resources", async () => {
+    const res = await request(app).get("/resources/recent");
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(DEFAULT_LIMIT);
+    // checks the values come DESC
+    expect(parseInt(res.body[0].id)).toBeGreaterThan(
+      parseInt(res.body[DEFAULT_LIMIT - 1].id),
+    );
+  });
+});
+
+describe("GET /users/:userId/resources", () => {
+  it("returns the a set of resources for a user", async () => {
+    const res = await request(app).get("/users/4/resources");
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+});
