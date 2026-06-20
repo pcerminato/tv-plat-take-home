@@ -1,7 +1,10 @@
 import { pool } from "../db";
 
+export type UserRole = "admin" | "member";
+
 export interface FindResourcesOpts {
-  ownerId?: number;
+  ownerId: number; // Now required to safely enforce member-level ownership isolation
+  role: UserRole; // Dictates whether the user can see shared resources
   limit?: number;
   last?: number;
   orderBy?: string;
@@ -17,65 +20,75 @@ export interface ResourceRow {
   title: string;
   created_at: Date;
   updated_at: Date;
+  shared_user_id: string | null;
 }
 
 export const DEFAULT_LIMIT = 10;
 
-// SHARED PATH — used by multiple endpoints. Changing this affects all callers.
-//
-// There is NO access control here: every caller sees every resource it asks
-// for, regardless of who is making the request. The auth stub populates
-// req.userId but it never reaches this function.
 export async function findResources(
-  opts: FindResourcesOpts = {},
+  opts: FindResourcesOpts,
 ): Promise<ResourceRow[]> {
   const params: unknown[] = [];
-  let sql = `
-    SELECT id, owner_id, type, status, title, created_at, updated_at
-    FROM resources
-  `;
 
-  if (
-    opts.ownerId !== undefined ||
-    opts.last !== undefined ||
-    opts.type !== undefined ||
-    opts.status !== undefined
-  ) {
-    let where = "";
+  // Helper to cleanly apply shared query filters across both UNION segments
+  const buildSharedFilters = () => {
+    let filters = "";
 
-    if (opts.ownerId !== undefined) {
-      params.push(opts.ownerId);
-      where += ` owner_id = $${params.length}`;
-    }
-
-    if (opts.last !== undefined) {
-      if (where !== "") {
-        where += " AND";
-      }
+    if (opts.last !== undefined && opts.last !== null) {
       params.push(opts.last);
-      where += ` id > $${params.length}`;
+      filters += ` AND r.id > $${params.length}`;
     }
 
-    if (opts.type !== undefined) {
-      if (where !== "") {
-        where += " AND";
-      }
+    if (opts.type !== undefined && opts.type !== null) {
       params.push(opts.type);
-      where += ` type = $${params.length}`;
+      filters += ` AND r.type = $${params.length}`;
     }
 
-    if (opts.status !== undefined) {
-      if (where !== "") {
-        where += " AND";
-      }
+    if (opts.status !== undefined && opts.status !== null) {
       params.push(opts.status);
-      where += ` status = $${params.length}`;
+      filters += ` AND r.status = $${params.length}`;
     }
 
-    sql += " WHERE " + where;
+    return filters;
+  };
+
+  let sql = "";
+
+  // CASE 1: Admin Role — High-performance UNION to pull owned AND shared items
+  if (opts.role === "admin") {
+    // PART A: Resources owned by the user
+    params.push(opts.ownerId);
+    let ownedQuery = `
+      SELECT r.id, r.owner_id, r.type, r.status, r.title, r.created_at, r.updated_at, rs.user_id AS shared_user_id
+      FROM resources r
+      LEFT JOIN resource_shares rs ON r.id = rs.resource_id
+      WHERE r.owner_id = $${params.length}
+    `;
+    ownedQuery += buildSharedFilters();
+
+    // PART B: Resources shared with the user (Fast INNER JOIN)
+    params.push(opts.ownerId);
+    let sharedQuery = `
+      SELECT r.id, r.owner_id, r.type, r.status, r.title, r.created_at, r.updated_at, rs.user_id AS shared_user_id
+      FROM resources r
+      INNER JOIN resource_shares rs ON r.id = rs.resource_id
+      WHERE rs.user_id = $${params.length}
+    `;
+    sharedQuery += buildSharedFilters();
+
+    sql = `(${ownedQuery}) UNION (${sharedQuery})`;
+  } else {
+    // CASE 2: Member Role — Strict isolation. Can only fetch owned items.
+    params.push(opts.ownerId);
+    sql = `
+      SELECT r.id, r.owner_id, r.type, r.status, r.title, r.created_at, r.updated_at, NULL AS shared_user_id
+      FROM resources r
+      WHERE r.owner_id = $${params.length}
+    `;
+    sql += buildSharedFilters();
   }
 
-  // orderBy is only ever passed internally (never from request input).
+  // --- Global Sorting and Pagination ---
   if (opts.orderBy) {
     sql += ` ORDER BY ${opts.orderBy}`;
   }
