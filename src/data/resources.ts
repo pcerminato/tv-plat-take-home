@@ -1,7 +1,10 @@
 import { pool } from "../db";
 
+export type UserRole = "admin" | "member";
+
 export interface FindResourcesOpts {
-  ownerId?: number;
+  ownerId: number;
+  role: UserRole;
   limit?: number;
   last?: number;
   orderBy?: string;
@@ -17,65 +20,51 @@ export interface ResourceRow {
   title: string;
   created_at: Date;
   updated_at: Date;
+  shared_user_id: string | null;
 }
 
 export const DEFAULT_LIMIT = 10;
 
-// SHARED PATH — used by multiple endpoints. Changing this affects all callers.
-//
-// There is NO access control here: every caller sees every resource it asks
-// for, regardless of who is making the request. The auth stub populates
-// req.userId but it never reaches this function.
 export async function findResources(
-  opts: FindResourcesOpts = {},
+  opts: FindResourcesOpts,
 ): Promise<ResourceRow[]> {
   const params: unknown[] = [];
-  let sql = `
-    SELECT id, owner_id, type, status, title, created_at, updated_at
-    FROM resources
-  `;
+  let sql = "";
 
-  if (
-    opts.ownerId !== undefined ||
-    opts.last !== undefined ||
-    opts.type !== undefined ||
-    opts.status !== undefined
-  ) {
-    let where = "";
+  // Admin Role — High-performance UNION to pull owned AND shared items
+  if (opts.role === "admin") {
+    // Resources owned by the user
+    params.push(opts.ownerId);
+    let ownedQuery = `
+      SELECT r.id, r.owner_id, r.type, r.status, r.title, r.created_at, r.updated_at, rs.user_id AS shared_user_id
+      FROM resources r
+      LEFT JOIN resource_shares rs ON r.id = rs.resource_id
+      WHERE r.owner_id = $${params.length}
+    `;
+    ownedQuery += buildSharedFilters(opts, params);
 
-    if (opts.ownerId !== undefined) {
-      params.push(opts.ownerId);
-      where += ` owner_id = $${params.length}`;
-    }
+    // Resources shared with the user
+    params.push(opts.ownerId);
+    let sharedQuery = `
+      SELECT r.id, r.owner_id, r.type, r.status, r.title, r.created_at, r.updated_at, rs.user_id AS shared_user_id
+      FROM resources r
+      INNER JOIN resource_shares rs ON r.id = rs.resource_id
+      WHERE rs.user_id = $${params.length}
+    `;
+    sharedQuery += buildSharedFilters(opts, params);
 
-    if (opts.last !== undefined) {
-      if (where !== "") {
-        where += " AND";
-      }
-      params.push(opts.last);
-      where += ` id > $${params.length}`;
-    }
-
-    if (opts.type !== undefined) {
-      if (where !== "") {
-        where += " AND";
-      }
-      params.push(opts.type);
-      where += ` type = $${params.length}`;
-    }
-
-    if (opts.status !== undefined) {
-      if (where !== "") {
-        where += " AND";
-      }
-      params.push(opts.status);
-      where += ` status = $${params.length}`;
-    }
-
-    sql += " WHERE " + where;
+    sql = `(${ownedQuery}) UNION (${sharedQuery})`;
+  } else {
+    // Member Role — Original simple query. Can only fetch owned items.
+    params.push(opts.ownerId);
+    sql = `
+      SELECT r.id, r.owner_id, r.type, r.status, r.title, r.created_at, r.updated_at, NULL AS shared_user_id
+      FROM resources r
+      WHERE r.owner_id = $${params.length}
+    `;
+    sql += buildSharedFilters(opts, params);
   }
 
-  // orderBy is only ever passed internally (never from request input).
   if (opts.orderBy) {
     sql += ` ORDER BY ${opts.orderBy}`;
   }
@@ -86,5 +75,28 @@ export async function findResources(
   }
 
   const result = await pool.query<ResourceRow>(sql, params);
+
   return result.rows;
 }
+
+/* Helper to build the filters for the WHERE clause */
+const buildSharedFilters = (opts: FindResourcesOpts, params: unknown[]) => {
+  let filters = "";
+
+  if (opts.last !== undefined && opts.last !== null) {
+    params.push(opts.last);
+    filters += ` AND r.id > $${params.length}`;
+  }
+
+  if (opts.type !== undefined && opts.type !== null) {
+    params.push(opts.type);
+    filters += ` AND r.type = $${params.length}`;
+  }
+
+  if (opts.status !== undefined && opts.status !== null) {
+    params.push(opts.status);
+    filters += ` AND r.status = $${params.length}`;
+  }
+
+  return filters;
+};

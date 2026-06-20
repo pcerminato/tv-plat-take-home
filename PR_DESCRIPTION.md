@@ -2,102 +2,129 @@
 
 ## Summary
 
-### Pagination stategy
-
-- _offset & limit_ (🟡): easy to implement: query params `?offset=20&limit=10` maps directly to the query `OFFSET 20 LIMIT 10` (aka. "skip 20, return the next 10"). Still the performance is downgrades as the offset grows, because the database scans the rows in the offset.
-- _page & page-size_ (🟡): the query params input would be different, `?page=1&size=10`, but the limitations are the same as the above approach.
-- _last-id_ (🟢): start a page after the last id of the last page. The query params would look like `?last=123&limit=10`. The query in the db is performant because it is based on the primary key (uses an existing index, no need to add a new one).
-
-The choice of _last-id_ is entirely based on the performance of the query, but for a real use case, the choice should consider how the API would be used: for example, if a UI will do traditional "back and forth" pages navigation, _offset & limit_ could be a good choice. But for infinite scrolling or real-time and for consistency (ex. avoid skipping new data) _last-id_ would be ideal.
-
-A consideration to bring up for the _last-id_ approach is that for the case of `/resources?last=1` (and `limit` is not set), when the dataset is large (say 1000), it'd return from `id=2`, to `id=1000`. So a constrait for the implementation is having `last` bound to `limit`: if `last` is set and limit is not, the code fallsback to a default value to prevent an unwanted large result. This case is covered in the unit test: `{ limit: undefined, last: 1, result: DEFAULT_LIMIT }`.
-
-### Security
-
-- Query params sanitizer. Added a custom middleware for query parameters validation at `middleware/input-sanitizer.ts`. The implementation relies on the `express-validator` package, but the approach to using it as middleware in the express app keeps it decoupled..
-- XSS: is catch by express-validator when using `isInt()` and `.escape()`
-- SQL injection. I am just relying on pg parametrized queries to prevent it. An alternative would be using an ORM.
-
-### Indexes
-
-Considering whether adding indexes for `type` and `status` will depend on:
-
-- the amount of data to scan in the DB (if the data is small, postgres might plan not to use the index and use seq scan).
-- the frequency the `type` and `status` params are used in the endpoint and how are they combined.
-
-Anyway, as `resources` is the main entity of the domain, I assume that the amount of data in it will grow as much as an index would be fundamental.
-
-Then mking the right choice on how to build the index will depend on the usage of `type` and `status`.
-
-Below come some assumptions.
-
-They could be used in a query _combined_ or _individually_.
-
-_Combined_ 🟡
-
-If combined is the use case, then a composite index would be a good choice. From there, the question that follows is what is the main column for the index? If either of the columns (ex. `status`) can be ensured to be the main, for example queries,
-`WHERE status = 'published' AND type = 'sheet'` or `WHERE status = 'published'`, the a coposite index status->type will suit perfectly.
-`CREATE INDEX idx_resources_status_type ON resources (status, type);`
-
-On the other hand, such index wouldn't work for queries filtered by just `WHERE type = 'sheet'`
-
-_individually (or combined)_ 🟢
-
-For this use case, two separate indexes on status and type would work out better, because it would provide more flexibility as postgres would combine them or use them individually.
-
-```
-CREATE INDEX idx_resources_type ON resources (type);
-CRETE INDEX idx_resources_status ON resources (status);
-```
-
-For either choice, it would also make sense to include the `id` as part of the index as it is used as a filter for pagination.
+_One or two sentences: what this PR does and why._
 
 ## Changes
 
-- Adding a middleware/input-sanitizer.ts defining operations to validate the inputs given in query string (limit, last).
-  - Invalid inputs would result on a "invalid value" response of the endpoint .
-- Adding pagination based on the _last-id_ strategy (explained above).
-- Adding filtering by `status` and `type`.
-- Including unit test cases to cover pagination edge cases and error expected.
-- Changing `findResources()` to implement pagination.
-  - Changes in `findResources()` are compatible with the previous behaviour of returning the full dataset.
-- Adding an error handler as a middleware to processed uncatched errors.
+_Bullet the meaningful changes (endpoints, the shared data path, schema/index
+changes, validation, etc.). Skip boilerplate._
+
+- Authentication:
+  - Adds a custom header `x-user-role` in the `authStub` middleware (note this is to emulate user role authentication, but this is not a production ready feature).
+  - Adds a `authorizeAdmin` middleware in _middleware/authorize-admin.ts_ to read role from the req header and disallow access if the user is not an admin.
+  - using `authorizeAdmin` to enable admin access only to `GET /users/:userId/resources`.
+- Access control
+  - /resources:
+    - it returns all resources owned by the authenticated users
+    - for `role=admin` the result also includes the resources shared with the user.
+  - /resources/recent: applies the same as for `/resources` but keeping the original filters logic (limit and sort)
+  - /users/:userId/resources
+    - `role=member` users are prevented to use this endpoint.
+    - `role=admin` can see other users resources (it works as impersonation).
+- Refactoring the shared data path for access control.
+  - Adding the role as a mandatory input to `findResources()`.
+  - Implementing the query builder logic based on the role.
+    - Splitting the flow control for role=admin and for role=member to reflect the use case of data visibility for each.
 
 ## Testing
 
-### Test cases for `/resources`
+The tests for all admin cases are not exaustive, but cover the most important cases.
 
-- **Automated tests:**
-  - Test suites to validate the expected behaviour on edge cases and for errors.
-  - A test suite to validate the consistency of the result of the combinations of the filters by `status` and `type`, along with the pagination parameters.
-  - Added two basic tests both for "GET /resources/recent" and for "GET /users/:userId/resources" endpoints to have cover backwards compatibility covered when changin `findResources()`.
-- **Edge cases:**
-  - bad inputs (ex. strings that don't represent numbers).
-  - requesting data out of the `limit`
-  - fallback to the default behaviour when no input is set.
+_The most important section._
+
+- **Automated tests:** what you added and what they cover.
+  - Refactored the tests introduced for the Task #1 to comply with the role contraints.
+  - Added an `test/endpoints.test.ts` with suites to cover authentication and access control. It is not exaustive, but covers the main features:
+    - `/user/:ownerId/resources`
+      - Access to the endpoint only for role=admin; access denied for rele=member.
+      - Access denied if authorization headers are missing
+    - `/resources`
+      - Test that the visibility of the resources returned for a role=member are as owner (no shared data).
+- **Edge cases:** (described above)
 - **Performance / regression:**
-  - Performance regresions are not expected for the pagination, because it relies on the `id`, which is an indexed value.
-  - With pagination this, the performance is improved. Still, to measure it properly, it'd be necessary to have a larger dataset, because with the 30 records that the sample has, posgres still uses a sequential a scan. For example:
-
-  `EXPLAIN ANALYSE SELECT id, owner_id, type, status, title, created_at, updated_at FROM resources WHERE id > 10;`
-
-  ```
-  Seq Scan on resources  (cost=0.00..22.38 rows=683 width=54) (actual time=0.085..0.090 rows=20 loops=1)
-   Filter: (id > 10)
-   Rows Removed by Filter: 10
-    Planning Time: 0.418 ms
-    Execution Time: 0.196 ms
-    (5 rows)
-  ```
-
-- **How verified:**
-  - Running the regular test suite: `npm run test`.
+  - Refactored the tests introduced for the Task #1 to comply with the role contraints.
+  - (see mentions in _Query investigation_ title)
+- **How verified:** Running the regular test suite: `npm run test`.
 
 ## Trade-offs
 
-(See "pagination strategy", "security" and "indexes" titles above.)
+- _Using real authentication_. For accessing the user role, I used the same approach that was for the user in `/middleware/auth.ts`, which is hardcoding the role in the headers. In production code, I would have built a `/login` endpoint to get the user's role from the `users` table. Then I would have used JWT to expose the user and the role ([this is an example how](https://github.com/pcerminato/keywords-server/blob/main/src/middleware/authenticationHandler.ts)).
 
 ## Open questions
 
-- As mentioned in the "pagination strategy", it'd make sense to verify in which way is the pagination intended to be used, so the choice for the strategy can be thoughtfully made.
-- I kept the endpoint `/resources` compatible to working the way it was given, meaning it returns the whole set of 30 records if it hasn't the `limit` and `last` params set. But that would not be recomended for prod, because if the dataset grows to thouzands of records, is a damage to performance.
+_Anything you'd raise with the team or that needs a product decision._
+
+- An assumption I made is that `/users/:userId/resources` works as an _impersonation_ endpoint that admin users can use to see the resources of other users just as the owner user would see them. I would verify this assumption with product.
+
+<hr />
+
+# PS
+
+## Query investigation
+
+As a starting point for a query to get all resources for an owner plus the resources shared I came up with it:
+
+```
+SELECT id, type, status, title, owner_id, user_id, created_at, updated_at
+FROM resources r LEFT JOIN resource_shares rs ON r.id = rs.resource_id
+WHERE  owner_id = 2 OR rs.user_id=2
+```
+
+Its performance looks good for the small dataset, but it will be a bad idea for larger datasets. The issue is that filtering a cross table result with `OR` forces postgres to do a complicated strategy; different sequential scans and then combining the results, unable to filter before joining.
+
+```
+ Hash Right Join  (cost=1.68..35.05 rows=1036 width=62) (actual time=1.399..1.409 rows=9 loops=1)
+   Hash Cond: (rs.resource_id = r.id)
+   Filter: ((r.owner_id = 2) OR (rs.user_id = 2))
+   Rows Removed by Filter: 21
+   ->  Seq Scan on resource_shares rs  (cost=0.00..28.50 rows=1850 width=16) (actual time=0.312..0.313 rows=5 loops=1)
+   ->  Hash  (cost=1.30..1.30 rows=30 width=54) (actual time=0.481..0.481 rows=30 loops=1)
+         Buckets: 1024  Batches: 1  Memory Usage: 11kB
+         ->  Seq Scan on resources r  (cost=0.00..1.30 rows=30 width=54) (actual time=0.039..0.046 rows=30 loops=1)
+ Planning Time: 3.592 ms
+ Execution Time: 2.142 ms
+(10 rows)
+```
+
+Indexes might help, but still the with the fact that using `OR` makes postgres filtering after joining making it have a large dataset in memory to work with.
+
+```
+CREATE INDEX idx_resources_owner_id ON resources(owner_id);
+CREATE INDEX idx_resource_shares_resource_id ON resource_shares (resource_id);
+```
+
+From that, it worths investigating a solution.
+
+Q&A iterations with Gemini suggested an approach that uses:
+
+- one select to query the resources own by the user,
+- other for the resources shared with the user,
+- then using UNION to combine the results.
+
+> I thought of something similar to this at the begining, because it allows you to split the queries and have direct management over the different datasets for owned and shared resources. But what I didn' like was having two separate queries. Also I didn't think of considering `UNION` because it might make the query too large.
+
+A query with union would look like this:
+
+```
+-- resources owned by the user
+SELECT r.id, r.type, r.status, r.title, r.owner_id, rs.user_id, r.created_at, r.updated_at
+FROM resources r
+LEFT JOIN resource_shares rs ON r.id = rs.resource_id
+WHERE r.owner_id = 2
+
+UNION
+
+-- resources shared with the user
+SELECT r.id, r.type, r.status, r.title, r.owner_id, rs.user_id, r.created_at, r.updated_at
+FROM resources r
+INNER JOIN resource_shares rs ON r.id = rs.resource_id
+WHERE rs.user_id = 2;
+```
+
+What makes this approach convincing is:
+
+- Creating the necessary indexes is straight forward and clear:
+  - Appart from those named above, one more combined index for the `JOIN` to allow jumping straight to the user_id, and its matching resources: `INDEX idx_resource_shares_user_resource ON resource_shares (user_id, resource_id);`
+- Having two different SELECTS is friendlier for the planner to use indexes.
+- What shines in this query is that it can filter before merging, which results on a smaller set of data to manage.
+- As an effect of using the queries like this, the code of `findResources()` can be refactored to clearly separate the queries for admin role (with JOIN and UNION) from the one for member role, which is just the single initial query. This also covers backward compatibility.

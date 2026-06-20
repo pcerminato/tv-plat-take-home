@@ -24,6 +24,6 @@ CREATE TABLE IF NOT EXISTS resource_shares (
 
 -- Plain FK index a naive baseline would add for owner lookups.
 CREATE INDEX IF NOT EXISTS idx_resources_owner_id ON resources(owner_id);
-
--- NOTE: this is the baseline only. Any indexes needed to make access-control
--- scoping efficient are intentionally NOT here.
+CREATE INDEX IF NOT EXISTS idx_resource_shares_resource_id ON resource_shares (resource_id);
+-- INDEX to directly access the user_id and directly retrieve the corresponding resources
+CREATE INDEX IF NOT EXISTS idx_resource_shares_user_resource ON resource_shares (user_id, resource_id);
