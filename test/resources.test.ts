@@ -103,22 +103,26 @@ describe("GET /resources", () => {
 });
 
 describe("GET /resources/recent", () => {
-  it("returns the full seeded set of resources", async () => {
-    const res = await request(app).get("/resources/recent");
+  it("returns the latest resources in DESC order", async () => {
+    const res = await request(app)
+      .get("/resources/recent")
+      .set(headers["admin"]);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(DEFAULT_LIMIT);
+    expect(res.body).toHaveLength(9);
     // checks the values come DESC
     expect(parseInt(res.body[0].id)).toBeGreaterThan(
-      parseInt(res.body[DEFAULT_LIMIT - 1].id),
+      parseInt(res.body[res.body.length - 1].id),
     );
   });
 });
 
 describe("GET /users/:userId/resources", () => {
   it("returns the a set of resources for a user", async () => {
-    const res = await request(app).get("/users/4/resources");
+    const res = await request(app)
+      .get("/users/4/resources")
+      .set(headers["admin"]);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
