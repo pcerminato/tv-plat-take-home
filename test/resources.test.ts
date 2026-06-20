@@ -9,6 +9,12 @@ import { DEFAULT_LIMIT } from "../src/data/resources";
 
 const app = createApp();
 
+const headers: Record<string, { "x-user-id": string; "x-user-role": string }> =
+  {
+    admin: { "x-user-id": "2", "x-user-role": "admin" },
+    member: { "x-user-id": "2", "x-user-role": "member" },
+  };
+
 beforeAll(async () => {
   // Boot against the docker Postgres: apply migrations, then reset + seed.
   await migrate();
@@ -20,45 +26,50 @@ afterAll(async () => {
 });
 
 describe("GET /resources", () => {
-  it("returns the full seeded set of resources", async () => {
-    const res = await request(app).get("/resources");
+  it.each([
+    { role: "admin", result: 9 },
+    { role: "member", result: 8 },
+  ])(
+    "returns the full seeded set of resources for role=$role",
+    async ({ role, result }) => {
+      const res = await request(app).get("/resources").set(headers[role]);
 
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(30);
-  });
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(result);
+    },
+  );
 
   describe("Paginated resources", () => {
     it.each([
-      { limit: 10, last: 10, result: 10 },
-      { limit: "10", last: "10", result: 10 },
-      { limit: 11, result: 11 },
-      { last: 29, result: 1 },
-      { last: 1, result: DEFAULT_LIMIT },
-      { limit: 10, last: 29, result: 1 }, // limit beyound available results
-      { last: 31, result: 0 }, // last higher that available
-      { limit: undefined, last: undefined, result: 30 }, // expect the full set
+      { limit: 10, last: 10, result: 5, role: "admin" },
+      { limit: "10", last: "10", result: 5, role: "admin" },
+      { limit: 11, result: 9, role: "admin" },
+      { last: 29, result: 1, role: "admin" },
+      { last: 1, result: 8, role: "admin" },
+      { limit: 10, last: 29, result: 1, role: "admin" },
+      { last: 31, result: 0, role: "admin" },
+      { limit: undefined, last: undefined, result: 9, role: "admin" },
     ])(
       "returns a paginated set of $result resources",
-      async ({ limit, last, result }) => {
+      async ({ limit, last, result, role }) => {
         const uri = buildResourcesUri({ limit, last });
-        const res = await request(app).get(uri);
+        const res = await request(app).get(uri).set(headers[role]);
 
         expect(res.status).toBe(200);
         expect(Array.isArray(res.body)).toBe(true);
         expect(res.body).toHaveLength(result);
       },
     );
-
     it.each([
-      [50, undefined],
-      ["hello", "world"],
-      [undefined, "DROP%20TABLE%20users;"],
+      { limit: 50, last: undefined, role: "admin" },
+      { limit: "hello", last: "world", role: "admin" },
+      { limit: undefined, last: "DROP%20TABLE%20users;", role: "admin" },
     ])(
       "returns an error for a bad input. Limit: %s, Last: %s",
-      async (limit, last) => {
+      async ({ limit, last, role }) => {
         const uri = buildResourcesUri({ limit, last });
-        const res = await request(app).get(uri);
+        const res = await request(app).get(uri).set(headers[role]);
 
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty("errors");
@@ -68,20 +79,20 @@ describe("GET /resources", () => {
 
   describe("Filtered resources", () => {
     it.each([
-      { status: undefined, type: undefined, result: 30 },
-      { type: "sheet", result: 10 },
-      { type: "doc", result: 10 },
-      { type: "slide", result: 10 },
-      { status: "archived", result: 10 },
-      { status: "draft", result: 10 },
-      { status: "published", result: 10 },
-      { status: "published", type: "doc", result: 0 },
-      { type: "doc", last: 16, result: 4 },
+      { status: undefined, type: undefined, result: 9, role: "admin" },
+      { type: "sheet", result: 3, role: "admin" },
+      { type: "doc", result: 3, role: "admin" },
+      { type: "slide", result: 3, role: "admin" },
+      { status: "archived", result: 3, role: "admin" },
+      { status: "draft", result: 3, role: "admin" },
+      { status: "published", result: 3, role: "admin" },
+      { status: "published", type: "doc", result: 0, role: "admin" },
+      { type: "doc", last: 16, result: 1, role: "admin" },
     ])(
       "returns $result resources for filters status:$status and type:$type",
-      async ({ status, type, last, result }) => {
+      async ({ status, type, last, result, role }) => {
         const uri = buildResourcesUri({ status, type, last });
-        const res = await request(app).get(uri);
+        const res = await request(app).get(uri).set(headers[role]);
 
         expect(res.status).toBe(200);
         expect(Array.isArray(res.body)).toBe(true);
