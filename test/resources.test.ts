@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import request from 'supertest';
-import { createApp } from '../src/app';
-import { migrate } from '../scripts/migrate';
-import { seed } from '../scripts/seed';
-import { pool } from '../src/db';
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import request from "supertest";
+import { createApp } from "../src/app";
+import { migrate } from "../scripts/migrate";
+import { seed } from "../scripts/seed";
+import { pool } from "../src/db";
+import { buildResourcesUri } from "./utils";
+import { DEFAULT_LIMIT } from "../src/data/resources";
 
 const app = createApp();
 
@@ -17,12 +19,97 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('GET /resources', () => {
-  it('returns the full seeded set of resources', async () => {
-    const res = await request(app).get('/resources');
+describe("GET /resources", () => {
+  it("returns the full seeded set of resources", async () => {
+    const res = await request(app).get("/resources");
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body).toHaveLength(30);
+  });
+
+  describe("Paginated resources", () => {
+    it.each([
+      { limit: 10, last: 10, result: 10 },
+      { limit: "10", last: "10", result: 10 },
+      { limit: 11, result: 11 },
+      { last: 29, result: 1 },
+      { last: 1, result: DEFAULT_LIMIT },
+      { limit: 10, last: 29, result: 1 }, // limit beyound available results
+      { last: 31, result: 0 }, // last higher that available
+      { limit: undefined, last: undefined, result: 30 }, // expect the full set
+    ])(
+      "returns a paginated set of $result resources",
+      async ({ limit, last, result }) => {
+        const uri = buildResourcesUri({ limit, last });
+        const res = await request(app).get(uri);
+
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body).toHaveLength(result);
+      },
+    );
+
+    it.each([
+      [50, undefined],
+      ["hello", "world"],
+      [undefined, "DROP%20TABLE%20users;"],
+    ])(
+      "returns an error for a bad input. Limit: %s, Last: %s",
+      async (limit, last) => {
+        const uri = buildResourcesUri({ limit, last });
+        const res = await request(app).get(uri);
+
+        expect(res.status).toBe(400);
+        expect(res.body).toHaveProperty("errors");
+      },
+    );
+  });
+
+  describe("Filtered resources", () => {
+    it.each([
+      { status: undefined, type: undefined, result: 30 },
+      { type: "sheet", result: 10 },
+      { type: "doc", result: 10 },
+      { type: "slide", result: 10 },
+      { status: "archived", result: 10 },
+      { status: "draft", result: 10 },
+      { status: "published", result: 10 },
+      { status: "published", type: "doc", result: 0 },
+      { type: "doc", last: 16, result: 4 },
+    ])(
+      "returns $result resources for filters status:$status and type:$type",
+      async ({ status, type, last, result }) => {
+        const uri = buildResourcesUri({ status, type, last });
+        const res = await request(app).get(uri);
+
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body).toHaveLength(result);
+      },
+    );
+  });
+});
+
+describe("GET /resources/recent", () => {
+  it("returns the full seeded set of resources", async () => {
+    const res = await request(app).get("/resources/recent");
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(DEFAULT_LIMIT);
+    // checks the values come DESC
+    expect(parseInt(res.body[0].id)).toBeGreaterThan(
+      parseInt(res.body[DEFAULT_LIMIT - 1].id),
+    );
+  });
+});
+
+describe("GET /users/:userId/resources", () => {
+  it("returns the a set of resources for a user", async () => {
+    const res = await request(app).get("/users/4/resources");
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
   });
 });
